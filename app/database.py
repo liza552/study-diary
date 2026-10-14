@@ -1,77 +1,84 @@
-import sqlite3
+import os
 import secrets
 import datetime as dt
 
+import pyodbc
+from dotenv import load_dotenv
+
 from app.security import hash_password
 
-DB_FILE = "diary.db"
+load_dotenv()
+CONN_STR = os.environ["DB_CONNECTION"]
+
+
+def _py(v):
+    """Приводим значения SQL Server к простым типам."""
+    if isinstance(v, bool):
+        return int(v)
+    if isinstance(v, dt.date):
+        return v.isoformat()
+    if isinstance(v, dt.time):
+        return v.strftime("%H:%M")
+    return v
+
+
+class Row(dict):
+    def __init__(self, cols, values):
+        super().__init__(zip(cols, values))
+        self._v = list(values)
+
+    def __getitem__(self, key):
+        return self._v[key] if isinstance(key, int) else super().__getitem__(key)
+
+
+class Cursor:
+    def __init__(self, cur):
+        self.cur = cur
+        self.cols = [d[0] for d in cur.description] if cur.description else []
+
+    def _row(self, r):
+        return Row(self.cols, [_py(x) for x in r])
+
+    def fetchall(self):
+        return [self._row(r) for r in self.cur.fetchall()]
+
+    def fetchone(self):
+        r = self.cur.fetchone()
+        return None if r is None else self._row(r)
+
+    def __iter__(self):
+        return iter(self.fetchall())
+
+
+class Conn:
+    def __init__(self):
+        self.c = pyodbc.connect(CONN_STR)
+
+    def execute(self, sql, args=()):
+        cur = self.c.cursor()
+        cur.execute(sql, args)
+        return Cursor(cur)
+
+    def executemany(self, sql, rows):
+        cur = self.c.cursor()
+        for r in rows:
+            cur.execute(sql, r)
+
+    def commit(self):
+        self.c.commit()
+
+    def close(self):
+        self.c.close()
 
 
 def db():
-    conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return Conn()
 
 
 def status_for(due: str) -> str:
     """Цвет задачи по сроку: late — срок истекает, soon — скоро, ok — есть время."""
     left = (dt.date.fromisoformat(due) - dt.date.today()).days
     return "late" if left <= 2 else "soon" if left <= 7 else "ok"
-
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    login TEXT UNIQUE NOT NULL,
-    salt TEXT NOT NULL,
-    password_hash TEXT NOT NULL,
-    name TEXT, full_name TEXT, city TEXT, college TEXT,
-    years TEXT, grp TEXT, about TEXT
-);
-CREATE TABLE IF NOT EXISTS tasks (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    title TEXT NOT NULL,
-    due TEXT NOT NULL,
-    kind TEXT NOT NULL DEFAULT 'task',
-    status TEXT NOT NULL,
-    done INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS notes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    date TEXT NOT NULL,
-    text TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS files (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    date TEXT NOT NULL,
-    name TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS lessons (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    weekday INTEGER NOT NULL,
-    time_from TEXT NOT NULL,
-    time_to TEXT NOT NULL,
-    title TEXT NOT NULL,
-    kind TEXT NOT NULL,
-    color TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS exams (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    subject TEXT NOT NULL,
-    date TEXT NOT NULL,
-    grade TEXT
-);
-CREATE TABLE IF NOT EXISTS teachers (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    subject TEXT NOT NULL
-);
-"""
 
 
 def seed(conn):
@@ -91,7 +98,6 @@ def seed(conn):
         ),
     )
 
-    # Задачи: сентябрь 2026 как в макете + несколько на ближайшие дни
     conn.executemany(
         "INSERT INTO tasks (user_id, title, due, kind, status, done) VALUES (1, ?, ?, 'task', ?, ?)",
         [
@@ -108,11 +114,13 @@ def seed(conn):
         "INSERT INTO notes (user_id, date, text) VALUES (1, '2026-09-27', ?)",
         ("Лекция по базам данных: нормальные формы, 1НФ-3НФ.",),
     )
-    conn.execute("INSERT INTO files (user_id, date, name) VALUES (1, '2026-09-27', 'Требования_ЛР3.pdf')")
+    conn.execute(
+        "INSERT INTO files (user_id, date, name) VALUES (1, '2026-09-27', ?)",
+        ("Требования_ЛР3.pdf",),
+    )
 
-    # Расписание Пн-Пт
     lessons = [
-        ("8:30", "10:20", "Базы данных", "Лекция", "ok"),
+        ("08:30", "10:20", "Базы данных", "Лекция", "ok"),
         ("10:20", "12:00", "Веб-разработка", "Практическая", "soon"),
         ("12:30", "14:00", "Философия", "Лекция", "late"),
         ("14:20", "16:00", "1С", "Практическая", "ok"),
@@ -125,7 +133,6 @@ def seed(conn):
                 (weekday, *l),
             )
 
-    # Экзамены
     conn.executemany(
         "INSERT INTO exams (user_id, subject, date, grade) VALUES (1, ?, ?, ?)",
         [
@@ -151,7 +158,6 @@ def seed(conn):
 
 def init_db():
     conn = db()
-    conn.executescript(SCHEMA)
     if conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
         seed(conn)
     conn.commit()

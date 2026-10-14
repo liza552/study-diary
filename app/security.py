@@ -1,10 +1,13 @@
+import os
 import hashlib
 import datetime as dt
 
 import jwt
+from dotenv import load_dotenv
 from fastapi import HTTPException
 
-SECRET = "change-this-secret-to-any-long-random-string-123456"
+load_dotenv()
+SECRET = os.environ["SECRET"]
 
 
 def hash_password(password: str, salt: str) -> str:

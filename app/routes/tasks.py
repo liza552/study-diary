@@ -20,15 +20,16 @@ class TaskIn(BaseModel):
 
 @router.get("/tasks")
 def calendar(year: int, month: int, user_id: int = Depends(uid)):
-    like = f"{year}-{month:02d}-%"
+    start = dt.date(year, month, 1)
+    end = dt.date(year + (month == 12), month % 12 + 1, 1)
     conn = db()
     tasks = conn.execute(
-        "SELECT id, title, due, kind, status, done FROM tasks WHERE user_id = ? AND due LIKE ? ORDER BY due, id",
-        (user_id, like),
+        "SELECT id, title, due, kind, status, done FROM tasks WHERE user_id = ? AND due >= ? AND due < ? ORDER BY due, id",
+        (user_id, start.isoformat(), end.isoformat()),
     ).fetchall()
     exams = conn.execute(
-        "SELECT id, subject, date FROM exams WHERE user_id = ? AND date LIKE ? ORDER BY date",
-        (user_id, like),
+        "SELECT id, subject, date FROM exams WHERE user_id = ? AND date >= ? AND date < ? ORDER BY date",
+        (user_id, start.isoformat(), end.isoformat()),
     ).fetchall()
     conn.close()
     out = [
@@ -72,7 +73,10 @@ def add_task(body: TaskIn, user_id: int = Depends(uid)):
 @router.post("/tasks/{task_id}/toggle")
 def toggle(task_id: int, user_id: int = Depends(uid)):
     conn = db()
-    conn.execute("UPDATE tasks SET done = 1 - done WHERE id = ? AND user_id = ?", (task_id, user_id))
+    conn.execute(
+        "UPDATE tasks SET done = CASE WHEN done = 1 THEN 0 ELSE 1 END WHERE id = ? AND user_id = ?",
+        (task_id, user_id),
+    )
     conn.commit()
     conn.close()
     return {"ok": True}
