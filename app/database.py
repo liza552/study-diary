@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from app.security import hash_password
 
 load_dotenv()
-CONN_STR = os.environ["DB_CONNECTION"]
+CONN_STR = os.environ.get("DB_CONNECTION", "")
 
 
 def _py(v):
