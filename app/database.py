@@ -1,4 +1,5 @@
 import os
+import time
 import secrets
 import datetime as dt
 
@@ -156,8 +157,62 @@ def seed(conn):
     )
 
 
+SCHEMA_SQL = [
+    """IF OBJECT_ID('users','U') IS NULL CREATE TABLE users (
+        id INT IDENTITY(1,1) PRIMARY KEY, login NVARCHAR(50) NOT NULL UNIQUE,
+        salt NVARCHAR(50) NOT NULL, password_hash NVARCHAR(200) NOT NULL,
+        name NVARCHAR(100), full_name NVARCHAR(150), city NVARCHAR(100),
+        college NVARCHAR(200), years NVARCHAR(20), grp NVARCHAR(20), about NVARCHAR(500))""",
+    """IF OBJECT_ID('tasks','U') IS NULL CREATE TABLE tasks (
+        id INT IDENTITY(1,1) PRIMARY KEY, user_id INT NOT NULL, title NVARCHAR(200) NOT NULL,
+        due DATE NOT NULL, kind NVARCHAR(20) NOT NULL DEFAULT 'task', status NVARCHAR(20) NOT NULL,
+        done BIT NOT NULL DEFAULT 0,
+        CONSTRAINT FK_tasks_users FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)""",
+    """IF OBJECT_ID('notes','U') IS NULL CREATE TABLE notes (
+        id INT IDENTITY(1,1) PRIMARY KEY, user_id INT NOT NULL, [date] DATE NOT NULL,
+        [text] NVARCHAR(MAX) NOT NULL,
+        CONSTRAINT FK_notes_users FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)""",
+    """IF OBJECT_ID('files','U') IS NULL CREATE TABLE files (
+        id INT IDENTITY(1,1) PRIMARY KEY, user_id INT NOT NULL, [date] DATE NOT NULL,
+        name NVARCHAR(255) NOT NULL,
+        CONSTRAINT FK_files_users FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)""",
+    """IF OBJECT_ID('lessons','U') IS NULL CREATE TABLE lessons (
+        id INT IDENTITY(1,1) PRIMARY KEY, user_id INT NOT NULL,
+        weekday TINYINT NOT NULL CHECK (weekday BETWEEN 0 AND 6),
+        time_from TIME NOT NULL, time_to TIME NOT NULL, title NVARCHAR(150) NOT NULL,
+        kind NVARCHAR(30) NOT NULL, color NVARCHAR(10) NOT NULL,
+        CONSTRAINT FK_lessons_users FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)""",
+    """IF OBJECT_ID('exams','U') IS NULL CREATE TABLE exams (
+        id INT IDENTITY(1,1) PRIMARY KEY, user_id INT NOT NULL, subject NVARCHAR(150) NOT NULL,
+        [date] DATE NOT NULL, grade NVARCHAR(30) NULL,
+        CONSTRAINT FK_exams_users FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)""",
+    """IF OBJECT_ID('teachers','U') IS NULL CREATE TABLE teachers (
+        id INT IDENTITY(1,1) PRIMARY KEY, name NVARCHAR(150) NOT NULL, subject NVARCHAR(200) NOT NULL)""",
+]
+
+
+def ensure_database():
+    master = CONN_STR.replace("DATABASE=StudyDiary", "DATABASE=master")
+    c = pyodbc.connect(master, autocommit=True)
+    c.execute("IF DB_ID('StudyDiary') IS NULL CREATE DATABASE StudyDiary")
+    c.close()
+
+
 def init_db():
+    for attempt in range(15):
+        try:
+            ensure_database()
+            break
+        except pyodbc.Error as e:
+            print(f"База данных ещё не готова ({attempt + 1}/15): {e}")
+            time.sleep(4)
+    else:
+        raise RuntimeError("Не удалось подключиться к базе данных")
+
     conn = db()
+    for sql in SCHEMA_SQL:
+        conn.execute(sql)
+    conn.commit()
     if conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
         seed(conn)
     conn.commit()
