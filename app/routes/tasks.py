@@ -28,7 +28,7 @@ def calendar(year: int, month: int, user_id: int = Depends(uid)):
         (user_id, start.isoformat(), end.isoformat()),
     ).fetchall()
     exams = conn.execute(
-        "SELECT id, subject, date FROM exams WHERE user_id = ? AND date >= ? AND date < ? ORDER BY date",
+        "SELECT id, subject, exam_date AS date FROM exams WHERE user_id = ? AND exam_date >= ? AND exam_date < ? ORDER BY exam_date",
         (user_id, start.isoformat(), end.isoformat()),
     ).fetchall()
     conn.close()
@@ -62,7 +62,7 @@ def add_task(body: TaskIn, user_id: int = Depends(uid)):
         raise HTTPException(422, "Неверная дата")
     conn = db()
     conn.execute(
-        "INSERT INTO tasks (user_id, title, due, kind, status, done) VALUES (?, ?, ?, 'task', ?, 0)",
+        "INSERT INTO tasks (user_id, title, due, kind, status, done) VALUES (?, ?, ?, 'task', ?, FALSE)",
         (user_id, body.title.strip(), body.due, status_for(body.due)),
     )
     conn.commit()
@@ -74,7 +74,7 @@ def add_task(body: TaskIn, user_id: int = Depends(uid)):
 def toggle(task_id: int, user_id: int = Depends(uid)):
     conn = db()
     conn.execute(
-        "UPDATE tasks SET done = CASE WHEN done = 1 THEN 0 ELSE 1 END WHERE id = ? AND user_id = ?",
+        "UPDATE tasks SET done = NOT done WHERE id = ? AND user_id = ?",
         (task_id, user_id),
     )
     conn.commit()

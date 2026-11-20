@@ -94,21 +94,21 @@ def delete_lesson(lesson_id: int, user_id: int = Depends(uid)):
 # ---------- День ----------
 @router.get("/day")
 def day(date: str, user_id: int = Depends(uid)):
-    note = rows("SELECT text FROM notes WHERE user_id = ? AND date = ?", (user_id, date))
+    note = rows("SELECT text FROM notes WHERE user_id = ? AND note_date = ?", (user_id, date))
     return {
         "note": note[0]["text"] if note else "",
         "tasks": rows("SELECT id, title, done, status FROM tasks WHERE user_id = ? AND due = ? ORDER BY id", (user_id, date)),
-        "exams": rows("SELECT id, subject FROM exams WHERE user_id = ? AND date = ?", (user_id, date)),
-        "files": rows("SELECT id, name FROM files WHERE user_id = ? AND date = ? ORDER BY id", (user_id, date)),
+        "exams": rows("SELECT id, subject FROM exams WHERE user_id = ? AND exam_date = ?", (user_id, date)),
+        "files": rows("SELECT id, name FROM files WHERE user_id = ? AND file_date = ? ORDER BY id", (user_id, date)),
     }
 
 
 @router.put("/day/note")
 def save_note(body: NoteIn, user_id: int = Depends(uid)):
     conn = db()
-    conn.execute("DELETE FROM notes WHERE user_id = ? AND date = ?", (user_id, body.date))
+    conn.execute("DELETE FROM notes WHERE user_id = ? AND note_date = ?", (user_id, body.date))
     if body.text.strip():
-        conn.execute("INSERT INTO notes (user_id, date, text) VALUES (?, ?, ?)", (user_id, body.date, body.text.strip()))
+        conn.execute("INSERT INTO notes (user_id, note_date, text) VALUES (?, ?, ?)", (user_id, body.date, body.text.strip()))
     conn.commit()
     conn.close()
     return {"ok": True}
@@ -131,7 +131,7 @@ def save_profile(body: ProfileIn, user_id: int = Depends(uid)):
 # ---------- Экзамены ----------
 @router.get("/exams")
 def exams(user_id: int = Depends(uid)):
-    r = rows("SELECT id, subject, date, grade FROM exams WHERE user_id = ? ORDER BY date", (user_id,))
+    r = rows("SELECT id, subject, exam_date AS date, grade FROM exams WHERE user_id = ? ORDER BY exam_date", (user_id,))
     return {"upcoming": [x for x in r if not x["grade"]], "passed": [x for x in r if x["grade"]]}
 
 
@@ -141,7 +141,7 @@ def add_exam(body: ExamIn, user_id: int = Depends(uid)):
         dt.date.fromisoformat(body.date)
     except ValueError:
         raise HTTPException(422, "Неверная дата")
-    return run("INSERT INTO exams (user_id, subject, date) VALUES (?, ?, ?)", (user_id, body.subject.strip(), body.date))
+    return run("INSERT INTO exams (user_id, subject, exam_date) VALUES (?, ?, ?)", (user_id, body.subject.strip(), body.date))
 
 
 @router.post("/exams/{exam_id}/grade")
@@ -177,7 +177,7 @@ def delete_teacher(teacher_id: int, user_id: int = Depends(uid)):
 def stats(user_id: int = Depends(uid)):
     conn = db()
     total = conn.execute("SELECT COUNT(*) FROM tasks WHERE user_id = ?", (user_id,)).fetchone()[0]
-    done = conn.execute("SELECT COUNT(*) FROM tasks WHERE user_id = ? AND done = 1", (user_id,)).fetchone()[0]
+    done = conn.execute("SELECT COUNT(*) FROM tasks WHERE user_id = ? AND done = TRUE", (user_id,)).fetchone()[0]
     grades = [r["grade"] for r in conn.execute("SELECT grade FROM exams WHERE user_id = ? AND grade IS NOT NULL", (user_id,))]
     upcoming = conn.execute("SELECT COUNT(*) FROM exams WHERE user_id = ? AND grade IS NULL", (user_id,)).fetchone()[0]
     conn.close()

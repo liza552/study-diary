@@ -3,17 +3,17 @@ import time
 import secrets
 import datetime as dt
 
-import pyodbc
+import psycopg
 from dotenv import load_dotenv
 
 from app.security import hash_password
 
 load_dotenv()
-CONN_STR = os.environ.get("DB_CONNECTION", "")
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
 
 def _py(v):
-    """Приводим значения SQL Server к простым типам."""
+    """Приводим значения Postgres к простым типам (так их ждет фронтенд)."""
     if isinstance(v, bool):
         return int(v)
     if isinstance(v, dt.date):
@@ -35,7 +35,7 @@ class Row(dict):
 class Cursor:
     def __init__(self, cur):
         self.cur = cur
-        self.cols = [d[0] for d in cur.description] if cur.description else []
+        self.cols = [d.name for d in cur.description] if cur.description else []
 
     def _row(self, r):
         return Row(self.cols, [_py(x) for x in r])
@@ -53,17 +53,19 @@ class Cursor:
 
 class Conn:
     def __init__(self):
-        self.c = pyodbc.connect(CONN_STR)
+        # prepare_threshold=None отключает подготовленные запросы: так работает и пулер Supabase в режиме Transaction
+        self.c = psycopg.connect(DATABASE_URL, prepare_threshold=None)
 
     def execute(self, sql, args=()):
         cur = self.c.cursor()
-        cur.execute(sql, args)
+        # в запросах проекта параметры записаны как ?, а psycopg ждет %s
+        cur.execute(sql.replace("?", "%s"), args)
         return Cursor(cur)
 
     def executemany(self, sql, rows):
         cur = self.c.cursor()
         for r in rows:
-            cur.execute(sql, r)
+            cur.execute(sql.replace("?", "%s"), r)
 
     def commit(self):
         self.c.commit()
@@ -87,9 +89,9 @@ def seed(conn):
     day = lambda n: (today + dt.timedelta(days=n)).isoformat()
 
     salt = secrets.token_hex(8)
-    conn.execute(
+    uid = conn.execute(
         "INSERT INTO users (login, salt, password_hash, name, full_name, city, college, years, grp, about)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
         (
             "student", salt, hash_password("1234", salt),
             "Иванов Иван", "Иванов Иван Иванович", "Новосибирск",
@@ -97,27 +99,27 @@ def seed(conn):
             "2024-2026", "-",
             "Здесь может быть небольшой текст о вас, ваших целях и интересах",
         ),
-    )
+    ).fetchone()[0]
 
     conn.executemany(
-        "INSERT INTO tasks (user_id, title, due, kind, status, done) VALUES (1, ?, ?, 'task', ?, ?)",
+        "INSERT INTO tasks (user_id, title, due, kind, status, done) VALUES (?, ?, ?, 'task', ?, ?)",
         [
-            ("Прочитать методичку", "2026-09-27", "ok", 1),
-            ("Сдать лабораторную №4", "2026-09-27", "soon", 0),
-            ("Оформить конспект в тетради", "2026-09-27", "ok", 0),
-            ("Лаб №4", "2026-09-29", "late", 0),
-            ("Сдать лабораторную №5", day(2), "late", 0),
-            ("Подготовить доклад", day(6), "soon", 0),
-            ("Курсовая: введение", day(15), "ok", 0),
+            (uid, "Прочитать методичку", "2026-09-27", "ok", True),
+            (uid, "Сдать лабораторную №4", "2026-09-27", "soon", False),
+            (uid, "Оформить конспект в тетради", "2026-09-27", "ok", False),
+            (uid, "Лаб №4", "2026-09-29", "late", False),
+            (uid, "Сдать лабораторную №5", day(2), "late", False),
+            (uid, "Подготовить доклад", day(6), "soon", False),
+            (uid, "Курсовая: введение", day(15), "ok", False),
         ],
     )
     conn.execute(
-        "INSERT INTO notes (user_id, date, text) VALUES (1, '2026-09-27', ?)",
-        ("Лекция по базам данных: нормальные формы, 1НФ-3НФ.",),
+        "INSERT INTO notes (user_id, note_date, text) VALUES (?, '2026-09-27', ?)",
+        (uid, "Лекция по базам данных: нормальные формы, 1НФ-3НФ."),
     )
     conn.execute(
-        "INSERT INTO files (user_id, date, name) VALUES (1, '2026-09-27', ?)",
-        ("Требования_ЛР3.pdf",),
+        "INSERT INTO files (user_id, file_date, name) VALUES (?, '2026-09-27', ?)",
+        (uid, "Требования_ЛР3.pdf"),
     )
 
     lessons = [
@@ -130,18 +132,18 @@ def seed(conn):
         for l in lessons:
             conn.execute(
                 "INSERT INTO lessons (user_id, weekday, time_from, time_to, title, kind, color)"
-                " VALUES (1, ?, ?, ?, ?, ?, ?)",
-                (weekday, *l),
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (uid, weekday, *l),
             )
 
     conn.executemany(
-        "INSERT INTO exams (user_id, subject, date, grade) VALUES (1, ?, ?, ?)",
+        "INSERT INTO exams (user_id, subject, exam_date, grade) VALUES (?, ?, ?, ?)",
         [
-            ("Базы данных", day(4), None),
-            ("Высшая математика", day(9), None),
-            ("Английский язык", day(21), None),
-            ("Физика", "2026-09-25", "Отлично"),
-            ("ОАП", "2026-09-29", "Хорошо"),
+            (uid, "Базы данных", day(4), None),
+            (uid, "Высшая математика", day(9), None),
+            (uid, "Английский язык", day(21), None),
+            (uid, "Физика", "2026-09-25", "Отлично"),
+            (uid, "ОАП", "2026-09-29", "Хорошо"),
         ],
     )
 
@@ -157,62 +159,19 @@ def seed(conn):
     )
 
 
-SCHEMA_SQL = [
-    """IF OBJECT_ID('users','U') IS NULL CREATE TABLE users (
-        id INT IDENTITY(1,1) PRIMARY KEY, login NVARCHAR(50) NOT NULL UNIQUE,
-        salt NVARCHAR(50) NOT NULL, password_hash NVARCHAR(200) NOT NULL,
-        name NVARCHAR(100), full_name NVARCHAR(150), city NVARCHAR(100),
-        college NVARCHAR(200), years NVARCHAR(20), grp NVARCHAR(20), about NVARCHAR(500))""",
-    """IF OBJECT_ID('tasks','U') IS NULL CREATE TABLE tasks (
-        id INT IDENTITY(1,1) PRIMARY KEY, user_id INT NOT NULL, title NVARCHAR(200) NOT NULL,
-        due DATE NOT NULL, kind NVARCHAR(20) NOT NULL DEFAULT 'task', status NVARCHAR(20) NOT NULL,
-        done BIT NOT NULL DEFAULT 0,
-        CONSTRAINT FK_tasks_users FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)""",
-    """IF OBJECT_ID('notes','U') IS NULL CREATE TABLE notes (
-        id INT IDENTITY(1,1) PRIMARY KEY, user_id INT NOT NULL, [date] DATE NOT NULL,
-        [text] NVARCHAR(MAX) NOT NULL,
-        CONSTRAINT FK_notes_users FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)""",
-    """IF OBJECT_ID('files','U') IS NULL CREATE TABLE files (
-        id INT IDENTITY(1,1) PRIMARY KEY, user_id INT NOT NULL, [date] DATE NOT NULL,
-        name NVARCHAR(255) NOT NULL,
-        CONSTRAINT FK_files_users FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)""",
-    """IF OBJECT_ID('lessons','U') IS NULL CREATE TABLE lessons (
-        id INT IDENTITY(1,1) PRIMARY KEY, user_id INT NOT NULL,
-        weekday TINYINT NOT NULL CHECK (weekday BETWEEN 0 AND 6),
-        time_from TIME NOT NULL, time_to TIME NOT NULL, title NVARCHAR(150) NOT NULL,
-        kind NVARCHAR(30) NOT NULL, color NVARCHAR(10) NOT NULL,
-        CONSTRAINT FK_lessons_users FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)""",
-    """IF OBJECT_ID('exams','U') IS NULL CREATE TABLE exams (
-        id INT IDENTITY(1,1) PRIMARY KEY, user_id INT NOT NULL, subject NVARCHAR(150) NOT NULL,
-        [date] DATE NOT NULL, grade NVARCHAR(30) NULL,
-        CONSTRAINT FK_exams_users FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)""",
-    """IF OBJECT_ID('teachers','U') IS NULL CREATE TABLE teachers (
-        id INT IDENTITY(1,1) PRIMARY KEY, name NVARCHAR(150) NOT NULL, subject NVARCHAR(200) NOT NULL)""",
-]
-
-
-def ensure_database():
-    master = CONN_STR.replace("DATABASE=StudyDiary", "DATABASE=master")
-    c = pyodbc.connect(master, autocommit=True)
-    c.execute("IF DB_ID('StudyDiary') IS NULL CREATE DATABASE StudyDiary")
-    c.close()
-
-
 def init_db():
+    conn = None
     for attempt in range(15):
         try:
-            ensure_database()
+            conn = db()
             break
-        except pyodbc.Error as e:
-            print(f"База данных ещё не готова ({attempt + 1}/15): {e}")
+        except psycopg.OperationalError as e:
+            print(f"База данных недоступна ({attempt + 1}/15): {e}")
             time.sleep(4)
-    else:
+    if conn is None:
         raise RuntimeError("Не удалось подключиться к базе данных")
 
-    conn = db()
-    for sql in SCHEMA_SQL:
-        conn.execute(sql)
-    conn.commit()
+    # таблицы созданы в Supabase вручную; если пользователей нет, добавляем демо-данные
     if conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0:
         seed(conn)
     conn.commit()

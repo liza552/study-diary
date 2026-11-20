@@ -1,5 +1,5 @@
-   fastapi
-   uvicorn
-   pyjwt
-   python-dotenv
-   pyodbc
+fastapi
+uvicorn
+pyjwt
+python-dotenv
+psycopg[binary]

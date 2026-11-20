@@ -3,9 +3,6 @@ name: Build and Push Backend
 on:
   push:
     branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
-  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
@@ -19,17 +16,17 @@ jobs:
       packages: write
 
     steps:
-      - name: Получить код
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Вход в Container Registry
+      - name: Log in to the Container Registry
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Извлечение метаданных для Docker
+      - name: Extract metadata (tags, labels) for Docker
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -38,10 +35,10 @@ jobs:
             type=raw,value=latest
             type=sha
 
-      - name: Сборка и публикация Docker-образа
+      - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
